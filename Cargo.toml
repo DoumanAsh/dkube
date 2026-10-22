@@ -1,0 +1,72 @@
+[package]
+name = "dkube"
+version = "0.1.0"
+edition = "2024"
+description = "Douman's utility for kubernetes cluster"
+license = "BSL-1.0"
+keywords = ["kube", "k8s"]
+repository = "https://github.com/DoumanAsh/dkube"
+readme = "README.md"
+include = [
+    "**/*.rs",
+    "Cargo.toml",
+    "LICENSE",
+    "README.md"
+]
+
+[[bin]]
+name = "dkube"
+path = "src/main.rs"
+required-features = ["cli"]
+
+# Critical dependencies
+[dependencies.kube]
+version = "4"
+default-features = false
+features = ["client", "rustls-tls", "aws-lc-rs", "gzip"]
+
+[dependencies.k8s-openapi]
+version = "0.28.0"
+default-features = false
+features = ["latest"]
+
+[dependencies.tokio]
+version = "1"
+default-features = false
+features = ["time"]
+
+# CLI dependencies
+[dependencies.arg]
+version = "0.4"
+features = ["std"]
+optional = true
+
+[dependencies.tabled]
+version = "0.22"
+default-features = false
+features = ["std"]
+
+# Data structures
+[dependencies.compact_str]
+version = "0.10"
+default-features = false
+
+[dependencies.statiki]
+version = "0.6.2"
+default-features = false
+
+# Dev dependencies
+[dev-dependencies.tokio]
+version = "1"
+default-features = false
+features = ["rt", "macros"]
+
+[features]
+cli = ["arg", "tokio/rt", "tokio/net"]
+
+[profile.release]
+lto = true
+opt-level = 3
+codegen-units = 1
+strip = true
+debug = false
