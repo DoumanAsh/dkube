@@ -2,6 +2,7 @@
 name = "dkube"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 description = "Douman's utility for kubernetes cluster"
 license = "BSL-1.0"
 keywords = ["kube", "k8s"]
