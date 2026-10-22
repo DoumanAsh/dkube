@@ -57,10 +57,7 @@ struct Args {
 }
 
 fn check_containers(pods: &[kube::Pod], args: CheckPods) -> ExitCode {
-    let mut containers = Vec::new();
-    for pod in pods.iter() {
-        containers.extend(pod.iter_containers());
-    }
+    let containers = kube::PodsContainers(pods);
     let mut tabled = output::Tabled::<_, &dyn output::Field<_>>::new();
 
     if args.node {
@@ -81,7 +78,7 @@ fn check_containers(pods: &[kube::Pod], args: CheckPods) -> ExitCode {
             .with_header(&output::fields::MEM);
     }
 
-    let table = tabled.data_tabled(&containers);
+    let table = tabled.data_tabled(containers);
     if let Err(error) = table.build(io::stdout().lock()) {
         eprintln!("Unexpected IO error: {error}");
         return ExitCode::FAILURE
@@ -91,7 +88,7 @@ fn check_containers(pods: &[kube::Pod], args: CheckPods) -> ExitCode {
 }
 
 fn check_pods(pods: &[kube::Pod], args: CheckPods) -> ExitCode {
-    let mut tabled = output::Tabled::<_, &'static dyn output::Field< _>>::new();
+    let mut tabled = output::Tabled::<_, &dyn output::Field< _>>::new();
     if args.node {
         tabled = tabled.with_header(&output::fields::Node);
     }

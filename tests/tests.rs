@@ -1,4 +1,4 @@
-use dkube::kube;
+use dkube::{kube, output};
 use dkube::utils::{WaitMethod, Retry};
 
 use core::future;
@@ -113,5 +113,47 @@ fn should_verify_pods_containers_iter() {
     assert_eq!(container.container.name, "container1");
     let container = pod.iter_containers().nth(3).expect("to get container");
     assert_eq!(container.container.name, "container2");
+}
 
+#[test]
+fn should_verify_pods_containers_tabled() {
+    let mut pod = kube::Pod {
+        name: "my super pod".into(),
+        namespace: "default".into(),
+        ..Default::default()
+    };
+    pod.init_containers.push(kube::PodContainer {
+        name: "init_container1".into(),
+        image: "init1".into(),
+        ..Default::default()
+    });
+    pod.init_containers.push(kube::PodContainer {
+        name: "init_container2".into(),
+        image: "init_container2".into(),
+        ..Default::default()
+    });
+    pod.containers.push(kube::PodContainer {
+        name: "container1".into(),
+        image: "image1".into(),
+        ..Default::default()
+    });
+    pod.containers.push(kube::PodContainer {
+        name: "container2".into(),
+        image: "image2".into(),
+        ..Default::default()
+    });
+
+    let tabled = output::Tabled::<_, &dyn output::Field<_>>::new().with_header(&output::fields::Namespace)
+                                                                  .with_header(&output::fields::Name)
+                                                                  .with_header(&output::fields::Image)
+                                                                  .data_tabled(&pod)
+                                                                  .with(tabled::settings::Style::psql())
+                                                                  .to_string();
+    let expected_table = concat!(
+ " Namespace | Name         | Image           \n",
+ " default   | my super pod | init1           \n",
+ " default   | my super pod | init_container2 \n",
+ " default   | my super pod | image1          \n",
+ " default   | my super pod | image2          ");
+    assert_eq!(tabled, expected_table, "Expected table:\n{expected_table}\nbut got:\n{tabled}");
 }

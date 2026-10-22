@@ -9,6 +9,6 @@ Douman's utility for kubernetes cluster
 
 Requires feature `cli` to enable `dkube` binary
 
-```
+```shell
 cargo build --release --features cli
 ```

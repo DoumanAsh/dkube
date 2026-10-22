@@ -5,39 +5,42 @@ use core::{mem, marker};
 ///Max possible field number
 pub const MAX_FIELD_COUNT: usize = 11;
 
+//TODO: This is a bit dumb but Copy basically is hack to get cheap ref type as parameter to allow PodContainerFullRef<'_> or plain reference
+//      AsRef cannot return the same lifetime as 'data, so either I create new trait or just use Copy
+//      Maybe there is some other idea, but if this works then who cares...
 ///Describe `DATA` field
-pub trait Field<DATA> {
+pub trait Field<'data, DATA: Copy + 'data> {
     ///Returns name of the field
     fn get_key(&self) -> &'static str;
     ///Returns value of the field
-    fn get_value<'a>(&self, data: &'a DATA) -> Option<&'a str>;
+    fn get_value(&self, data: DATA) -> Option<&'data str>;
 }
 
-impl<DATA, F: Field<DATA> + ?Sized> Field<DATA> for &F {
+impl<'data, DATA: Copy + 'data, F: Field<'data, DATA> + ?Sized> Field<'data, DATA> for &F {
     #[inline(always)]
     fn get_key(&self) -> &'static str {
         (**self).get_key()
     }
 
     #[inline(always)]
-    fn get_value<'a>(&self, data: &'a DATA) -> Option<&'a str> {
+    fn get_value(&self, data: DATA) -> Option<&'data str> {
         (**self).get_value(data)
     }
 }
 
 ///CompactTable created by [Tabled]
-pub type CompactTable<'a, DATA, IT, FIELD> = tabled::tables::CompactTable<
-    TabledIter<'a, DATA, <IT as IntoIterator>::IntoIter, FIELD>,
-    TabledDimensions<'a, DATA, IT, FIELD>
+pub type CompactTable<'a, 'data, DATA, IT, FIELD> = tabled::tables::CompactTable<
+    TabledIter<'a, 'data, DATA, <IT as IntoIterator>::IntoIter, FIELD>,
+    TabledDimensions<'a, 'data, DATA, IT, FIELD>
 >;
 
 ///Output formatter for tabled crate
-pub struct Tabled<DATA, F: Field<DATA>> {
+pub struct Tabled<'data, DATA: Copy + 'data, F: Field<'data, DATA>> {
     fields: statiki::Array<F, MAX_FIELD_COUNT>,
-    _data: marker::PhantomData<DATA>
+    _data: marker::PhantomData<&'data DATA>
 }
 
-impl<DATA, F: Field<DATA>> Tabled<DATA, F> {
+impl<'data, DATA: Copy + 'data, F: Field<'data, DATA>> Tabled<'data, DATA, F> {
     #[inline(always)]
     ///Creates new empty [Tabled]
     pub const fn new() -> Self {
@@ -61,12 +64,13 @@ impl<DATA, F: Field<DATA>> Tabled<DATA, F> {
 
     #[inline(always)]
     ///Returns iterator over header names and  `data` values as iterator of iterators [TabledIter]
-    pub fn data_iter<'a, IT: Iterator<Item = &'a DATA>>(&'a self, data: IT) -> TabledIter<'a, DATA, IT, F> {
+    pub fn data_iter<'a, IT: Iterator<Item = DATA>>(&'a self, data: IT) -> TabledIter<'a, 'data, DATA, IT, F> {
         TabledIter {
             fields: self.fields.as_slice(),
             data,
             header_written: false,
             buffer: statiki::Array::new(),
+            _data: marker::PhantomData,
         }
     }
 
@@ -76,33 +80,37 @@ impl<DATA, F: Field<DATA>> Tabled<DATA, F> {
     ///`IT` must be cheap to copy IntoIterator (e.g. slice)
     ///It is recommended to rely on good iterators that implement `ExactSizedIterator` as these can
     ///implement [Iterator::nth] in efficient manner
-    pub fn data_tabled<'a, IT: IntoIterator<Item = &'a DATA> + Copy>(&'a self, data: IT) -> CompactTable<'a, DATA, IT, F> {
+    pub fn data_tabled<'a, IT: IntoIterator<Item = DATA> + Copy>(&'a self, data: IT) -> CompactTable<'a, 'data, DATA, IT, F> {
         let data_iter = self.data_iter(data.into_iter());
         let dimension = TabledDimensions {
             fields: &self.fields,
             data,
+            _data: marker::PhantomData,
         };
-        CompactTable::with_dimension(data_iter, dimension)
+        CompactTable::with_dimension(data_iter, dimension).columns(self.fields.len())
     }
 }
 
 ///`Dimension` implementation
-pub struct TabledDimensions<'a, DATA: 'a, IT: IntoIterator<Item = &'a DATA> + Copy, F: Field<DATA>> {
+pub struct TabledDimensions<'a, 'data, DATA: Copy + 'data, IT: IntoIterator + Copy, F: Field<'data, DATA>> {
     fields: &'a [F],
-    data: IT
+    data: IT,
+    _data: core::marker::PhantomData<&'data DATA>,
 }
 
-impl<'a, DATA: 'a, IT: IntoIterator<Item = &'a DATA> + Copy, F: Field<DATA>> tabled::grid::dimension::Dimension for TabledDimensions<'a, DATA, IT, F> {
+impl<'a, 'data, DATA: Copy + 'data, IT: IntoIterator<Item = DATA> + Copy, F: Field<'data, DATA>> tabled::grid::dimension::Dimension for TabledDimensions<'a, 'data, DATA, IT, F> {
     fn get_width(&self, column: usize) -> usize {
         use tabled::grid::util::string::get_string_width;
 
-        match column {
+        let result = match column {
             0 => self.fields.iter().map(|field| get_string_width(field.get_key())).max().unwrap_or_default(),
             idx => self.data.into_iter()
                             .nth(idx.saturating_sub(1))
                             .map(|data| self.fields.iter().map(|field| get_string_width(field.get_value(data).unwrap_or_default())).max().unwrap_or_default())
                             .unwrap_or_default()
-        }
+        };
+        //tabled needs at least 2 bytes of padding
+        result.saturating_add(2)
     }
 
     fn get_height(&self, _: usize) -> usize {
@@ -111,15 +119,17 @@ impl<'a, DATA: 'a, IT: IntoIterator<Item = &'a DATA> + Copy, F: Field<DATA>> tab
 }
 
 ///Iterator to passs into `tabled` for purpose of printing data
-pub struct TabledIter<'a, DATA: 'a, IT: Iterator<Item = &'a DATA>, F: Field<DATA>> {
+pub struct TabledIter<'a, 'data, DATA: Copy + 'data, IT: Iterator, F: Field<'data, DATA>> {
     fields: &'a [F],
     data: IT,
     header_written: bool,
-    buffer: statiki::Array<&'a str, MAX_FIELD_COUNT>,
+    buffer: statiki::Array<&'data str, MAX_FIELD_COUNT>,
+    _data: core::marker::PhantomData<&'data DATA>,
 }
 
-impl<'a, DATA, IT: Iterator<Item = &'a DATA>, F: Field<DATA>> Iterator for TabledIter<'a, DATA, IT, F> {
-    type Item = statiki::array::ArrayConsumer<&'a str, MAX_FIELD_COUNT>;
+impl<'a, 'data, DATA: Copy + 'data, IT: Iterator<Item = DATA>, F: Field<'data, DATA>> Iterator for TabledIter<'a, 'data, DATA, IT, F> {
+    type Item = statiki::array::ArrayConsumer<&'data str, MAX_FIELD_COUNT>;
+
     fn next(&mut self) -> Option<Self::Item> {
         if self.header_written {
             let data = self.data.next()?;
@@ -147,7 +157,7 @@ macro_rules! impl_field {
         $(
         $(#[$doc:meta])*
         impl $name:ident for $(
-            $typ:ident$(<$lifetime:lifetime>)?$(.$field:ident)+)+
+            $(&$ref:lifetime)?$typ:ident$(<$lifetime:lifetime>)?$(.$field:ident)+)+
         )+
     ) => {
         $(
@@ -156,14 +166,14 @@ macro_rules! impl_field {
             pub struct $name;
 
             $(
-                impl Field<$crate::kube::$typ$(<$lifetime>)*> for $name {
+                impl<'data> Field<'data, $(&$ref)*$crate::kube::$typ$(<$lifetime>)*> for $name {
                     #[inline(always)]
                     fn get_key(&self) -> &'static str {
                         stringify!($name)
                     }
 
                     #[inline(always)]
-                    fn get_value<'a>(&self, data: &'a $crate::kube::$typ) -> Option<&'a str> {
+                    fn get_value(&self, data: $(&$ref)*$crate::kube::$typ$(<$lifetime>)*) -> Option<&'data str> {
                         Some(&data$(.$field)+)
                     }
                 }
@@ -177,7 +187,7 @@ macro_rules! impl_opt_field {
         $(
         $(#[$doc:meta])*
         impl $name:ident for $(
-            $typ:ident$(<$lifetime:lifetime>)?$(.$field:ident)+)+
+            $(&$ref:lifetime)?$typ:ident$(<$lifetime:lifetime>)?$(.$field:ident)+)+
         )+
     ) => {
         $(
@@ -186,14 +196,14 @@ macro_rules! impl_opt_field {
             pub struct $name;
 
             $(
-                impl Field<$crate::kube::$typ$(<$lifetime>)*> for $name {
+                impl<'data> Field<'data, $(&$ref)*$crate::kube::$typ$(<$lifetime>)*> for $name {
                     #[inline(always)]
                     fn get_key(&self) -> &'static str {
                         stringify!($name)
                     }
 
                     #[inline(always)]
-                    fn get_value<'a>(&self, data: &'a $crate::kube::$typ) -> Option<&'a str> {
+                    fn get_value(&self, data: $(&$ref)*$crate::kube::$typ$(<$lifetime>)*) -> Option<&'data str> {
                         match &data$(.$field)+ {
                             Some(value) => Some(value),
                             None => None,
@@ -211,31 +221,31 @@ pub mod fields {
 
     impl_field!(
         ///Name accessor
-        impl Name for Pod.name PodContainer.name PodContainerFullRef<'_>.pod.name
+        impl Name for &'data Pod.name &'data PodContainer.name PodContainerFullRef<'data>.pod.name
         ///Namespace accessor
-        impl Namespace for Pod.namespace PodContainerFullRef<'_>.pod.namespace
+        impl Namespace for &'data Pod.namespace PodContainerFullRef<'data>.pod.namespace
         ///Status accessor
-        impl Status for PodContainer.status PodContainerFullRef<'_>.container.status
+        impl Status for &'data PodContainer.status PodContainerFullRef<'data>.container.status
         ///Image accessor
-        impl Image for PodContainer.image PodContainerFullRef<'_>.container.image
+        impl Image for &'data PodContainer.image PodContainerFullRef<'data>.container.image
     );
 
     impl_opt_field!(
         ///Node accessor
-        impl Node for Pod.node_name PodContainerFullRef<'_>.pod.node_name
+        impl Node for &'data Pod.node_name PodContainerFullRef<'data>.pod.node_name
         ///IP accessor
-        impl Ip for Pod.pod_ip PodContainerFullRef<'_>.pod.pod_ip
+        impl Ip for &'data Pod.pod_ip PodContainerFullRef<'data>.pod.pod_ip
         ///ImageId accessor
-        impl ImageId for PodContainer.image_id PodContainerFullRef<'_>.container.image_id
+        impl ImageId for &'data PodContainer.image_id PodContainerFullRef<'data>.container.image_id
         ///CPU accessor
-        impl CPU for PodContainer.resources.requests.cpu PodContainerFullRef<'_>.container.resources.requests.cpu
+        impl CPU for &'data PodContainer.resources.requests.cpu PodContainerFullRef<'data>.container.resources.requests.cpu
         ///Memory accessor
-        impl MEM for PodContainer.resources.requests.memory PodContainerFullRef<'_>.container.resources.requests.memory
+        impl MEM for &'data PodContainer.resources.requests.memory PodContainerFullRef<'data>.container.resources.requests.memory
         #[allow(non_camel_case_types)]
         ///Max CPU accessor
-        impl MAX_CPU for PodContainer.resources.limits.cpu PodContainerFullRef<'_>.container.resources.limits.cpu
+        impl MAX_CPU for &'data PodContainer.resources.limits.cpu PodContainerFullRef<'data>.container.resources.limits.cpu
         #[allow(non_camel_case_types)]
         ///Max Memory accessor
-        impl MAX_MEM for PodContainer.resources.limits.memory PodContainerFullRef<'_>.container.resources.limits.memory
+        impl MAX_MEM for &'data PodContainer.resources.limits.memory PodContainerFullRef<'data>.container.resources.limits.memory
     );
 }
