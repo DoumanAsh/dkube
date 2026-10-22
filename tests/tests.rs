@@ -117,6 +117,8 @@ fn should_verify_pods_containers_iter() {
 
 #[test]
 fn should_verify_pods_containers_tabled() {
+    use tabled::grid::dimension::Dimension;
+
     let mut pod = kube::Pod {
         name: "my super pod".into(),
         namespace: "default".into(),
@@ -145,10 +147,18 @@ fn should_verify_pods_containers_tabled() {
 
     let tabled = output::Tabled::<_, &dyn output::Field<_>>::new().with_header(&output::fields::Namespace)
                                                                   .with_header(&output::fields::Name)
-                                                                  .with_header(&output::fields::Image)
-                                                                  .data_tabled(&pod)
-                                                                  .with(tabled::settings::Style::psql())
-                                                                  .to_string();
+                                                                  .with_header(&output::fields::Image);
+    let dimensions = output::TabledDimensions::compute(tabled.headers(), (&pod).into_iter());
+    assert_eq!(dimensions.len(), 3);
+    assert_eq!(dimensions.get_width(0), 9 + output::TabledDimensions::PADDING);
+    assert_eq!(dimensions.get_width(1), 12 + output::TabledDimensions::PADDING);
+    assert_eq!(dimensions.get_width(2), 15 + output::TabledDimensions::PADDING);
+    //out of bounds defaults to zero
+    assert_eq!(dimensions.get_width(3), output::TabledDimensions::PADDING);
+
+    let tabled = tabled.data_tabled(&pod)
+                       .with(tabled::settings::Style::psql())
+                       .to_string();
     let expected_table = concat!(
  " Namespace | Name         | Image           \n",
  " default   | my super pod | init1           \n",

@@ -1,6 +1,6 @@
 //!Efficient output formatting to minimize allocations necessary for use of `tabled`
 
-use core::{mem, marker};
+use core::{cmp, mem, marker};
 
 ///Max possible field number
 pub const MAX_FIELD_COUNT: usize = 11;
@@ -30,8 +30,8 @@ impl<'data, DATA: Copy + 'data, F: Field<'data, DATA> + ?Sized> Field<'data, DAT
 
 ///CompactTable created by [Tabled]
 pub type CompactTable<'a, 'data, DATA, IT, FIELD> = tabled::tables::CompactTable<
-    TabledIter<'a, 'data, DATA, <IT as IntoIterator>::IntoIter, FIELD>,
-    TabledDimensions<'a, 'data, DATA, IT, FIELD>
+    TabledIter<'a, 'data, DATA, IT, FIELD>,
+    TabledDimensions
 >;
 
 ///Output formatter for tabled crate
@@ -63,6 +63,12 @@ impl<'data, DATA: Copy + 'data, F: Field<'data, DATA>> Tabled<'data, DATA, F> {
     }
 
     #[inline(always)]
+    ///Access headers
+    pub const fn headers(&self) -> &[F] {
+        self.fields.as_slice()
+    }
+
+    #[inline(always)]
     ///Returns iterator over header names and  `data` values as iterator of iterators [TabledIter]
     pub fn data_iter<'a, IT: Iterator<Item = DATA>>(&'a self, data: IT) -> TabledIter<'a, 'data, DATA, IT, F> {
         TabledIter {
@@ -80,39 +86,62 @@ impl<'data, DATA: Copy + 'data, F: Field<'data, DATA>> Tabled<'data, DATA, F> {
     ///`IT` must be cheap to copy IntoIterator (e.g. slice)
     ///It is recommended to rely on good iterators that implement `ExactSizedIterator` as these can
     ///implement [Iterator::nth] in efficient manner
-    pub fn data_tabled<'a, IT: IntoIterator<Item = DATA> + Copy>(&'a self, data: IT) -> CompactTable<'a, 'data, DATA, IT, F> {
+    pub fn data_tabled<'a, IT: IntoIterator<Item = DATA> + Copy>(&'a self, data: IT) -> CompactTable<'a, 'data, DATA, IT::IntoIter, F> {
         let data_iter = self.data_iter(data.into_iter());
-        let dimension = TabledDimensions {
-            fields: &self.fields,
-            data,
-            _data: marker::PhantomData,
-        };
-        CompactTable::with_dimension(data_iter, dimension).columns(self.fields.len())
+        let dimension = TabledDimensions::compute(&self.fields, data.into_iter());
+        let columns = dimension.len();
+        CompactTable::with_dimension(data_iter, dimension).columns(columns)
     }
 }
 
 ///`Dimension` implementation
-pub struct TabledDimensions<'a, 'data, DATA: Copy + 'data, IT: IntoIterator + Copy, F: Field<'data, DATA>> {
-    fields: &'a [F],
-    data: IT,
-    _data: core::marker::PhantomData<&'data DATA>,
+pub struct TabledDimensions {
+    dimensions: statiki::Array<usize, MAX_FIELD_COUNT>,
 }
 
-impl<'a, 'data, DATA: Copy + 'data, IT: IntoIterator<Item = DATA> + Copy, F: Field<'data, DATA>> tabled::grid::dimension::Dimension for TabledDimensions<'a, 'data, DATA, IT, F> {
-    fn get_width(&self, column: usize) -> usize {
+impl TabledDimensions {
+    ///Default padding
+    pub const PADDING: usize = 2;
+
+    ///Calculates table dimensions using provided `header` and `data`
+    pub fn compute<'a, DATA: 'a + Copy , F: Field<'a, DATA>>(header: &[F], data: impl Iterator<Item = DATA>) -> Self {
         use tabled::grid::util::string::get_string_width;
 
-        let result = match column {
-            0 => self.fields.iter().map(|field| get_string_width(field.get_key())).max().unwrap_or_default(),
-            idx => self.data.into_iter()
-                            .nth(idx.saturating_sub(1))
-                            .map(|data| self.fields.iter().map(|field| get_string_width(field.get_value(data).unwrap_or_default())).max().unwrap_or_default())
-                            .unwrap_or_default()
-        };
-        //tabled needs at least 2 bytes of padding
-        result.saturating_add(2)
+        let mut dimensions = statiki::Array::new();
+        for field in header {
+            let result = dimensions.push(get_string_width(field.get_key()));
+            debug_assert!(result.is_none());
+        }
+
+        //once populated with header's default width, proceed to iterate over data computing max for every column
+        for data in data {
+            for (idx, field) in header.iter().enumerate() {
+                if let Some(value) = field.get_value(data) {
+                    dimensions[idx] = cmp::max(dimensions[idx], get_string_width(value));
+                }
+            }
+        }
+
+        Self {
+            dimensions
+        }
     }
 
+    #[inline(always)]
+    ///Return number of columns
+    pub fn len(&self) -> usize {
+        self.dimensions.len()
+    }
+}
+
+impl tabled::grid::dimension::Dimension for TabledDimensions {
+    #[inline(always)]
+    fn get_width(&self, column: usize) -> usize {
+        //tabled needs at least 2 bytes of padding
+        self.dimensions.get(column).copied().unwrap_or_default().saturating_add(Self::PADDING)
+    }
+
+    #[inline(always)]
     fn get_height(&self, _: usize) -> usize {
         1
     }
