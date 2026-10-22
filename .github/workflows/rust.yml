@@ -21,6 +21,6 @@ jobs:
     uses: DoumanAsh/douman-ci/.github/workflows/rust.yml@master
     with:
       cargo-features: "cli"
-      min-rustc-version: "1.85.0"
+      min-rustc-version: "1.89.0"
       cargo-no-features: true
       miri: true
