@@ -251,6 +251,8 @@ pub mod fields {
     impl_field!(
         ///Name accessor
         impl Name for &'data Pod.name &'data PodContainer.name PodContainerFullRef<'data>.pod.name
+        ///Container Name accessor
+        impl Container for &'data PodContainer.name PodContainerFullRef<'data>.container.name
         ///Namespace accessor
         impl Namespace for &'data Pod.namespace PodContainerFullRef<'data>.pod.namespace
         ///Status accessor

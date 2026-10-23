@@ -21,6 +21,9 @@ struct CheckPods {
     ///Enables requests information
     requests: bool,
     #[arg(long)]
+    ///Enables image information
+    image: bool,
+    #[arg(long)]
     ///Enables image_id information
     image_id: bool,
 }
@@ -74,10 +77,15 @@ fn check_containers(pods: &[kube::Pod], args: CheckPods) -> ExitCode {
         tabled = tabled.with_header(&output::fields::Node);
     }
 
-    tabled = tabled.with_header(&output::fields::Namespace)
-                   .with_header(&output::fields::Name)
-                   .with_header(&output::fields::Ip)
-                   .with_header(&output::fields::Image);
+    tabled = tabled.with_header(&output::fields::Name)
+                   .with_header(&output::fields::Namespace)
+                   .with_header(&output::fields::Status)
+                   .with_header(&output::fields::Container)
+                   .with_header(&output::fields::Ip);
+
+    if args.image {
+        tabled = tabled.with_header(&output::fields::Image);
+    }
 
     if args.image_id {
         tabled = tabled.with_header(&output::fields::ImageId);
@@ -96,8 +104,8 @@ fn check_pods(pods: &[kube::Pod], args: CheckPods) -> ExitCode {
     if args.node {
         tabled = tabled.with_header(&output::fields::Node);
     }
-    tabled = tabled.with_header(&output::fields::Namespace)
-                   .with_header(&output::fields::Name)
+    tabled = tabled.with_header(&output::fields::Name)
+                   .with_header(&output::fields::Namespace)
                    .with_header(&output::fields::Ip);
 
     print_table(tabled.data_tabled(pods))
