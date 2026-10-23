@@ -56,6 +56,16 @@ struct Args {
     cmd: Command,
 }
 
+#[inline]
+fn print_table<'data, DATA: Copy + 'data, IT: Iterator<Item = DATA>, F: output::Field<'data, DATA>>(table: output::CompactTable<'_, 'data, DATA, IT, F>) -> ExitCode {
+    if let Err(error) = table.with(tabled::settings::Style::psql()).build(io::stdout().lock()) {
+        eprintln!("Unexpected IO error: {error}");
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
 fn check_containers(pods: &[kube::Pod], args: CheckPods) -> ExitCode {
     let containers = kube::PodsContainers(pods);
     let mut tabled = output::Tabled::<_, &dyn output::Field<_>>::new();
@@ -75,16 +85,10 @@ fn check_containers(pods: &[kube::Pod], args: CheckPods) -> ExitCode {
 
     if args.requests {
         tabled = tabled.with_header(&output::fields::CPU)
-            .with_header(&output::fields::MEM);
+                       .with_header(&output::fields::MEM);
     }
 
-    let table = tabled.data_tabled(containers);
-    if let Err(error) = table.build(io::stdout().lock()) {
-        eprintln!("Unexpected IO error: {error}");
-        return ExitCode::FAILURE
-    }
-
-    ExitCode::SUCCESS
+    print_table(tabled.data_tabled(containers))
 }
 
 fn check_pods(pods: &[kube::Pod], args: CheckPods) -> ExitCode {
@@ -96,13 +100,7 @@ fn check_pods(pods: &[kube::Pod], args: CheckPods) -> ExitCode {
                    .with_header(&output::fields::Name)
                    .with_header(&output::fields::Ip);
 
-    let table = tabled.data_tabled(pods);
-    if let Err(error) = table.build(io::stdout().lock()) {
-        eprintln!("Unexpected IO error: {error}");
-        return ExitCode::FAILURE
-    }
-
-    ExitCode::SUCCESS
+    print_table(tabled.data_tabled(pods))
 }
 
 async fn run(args: Args) -> ExitCode {
