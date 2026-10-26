@@ -29,17 +29,30 @@ struct CheckPods {
 }
 
 #[derive(arg::Args, Debug)]
+///Check the state of cluster
+struct CheckNodes {
+    #[arg(long)]
+    ///Enables image information (image, kernel, arch)
+    image: bool,
+    #[arg(long)]
+    ///Lists external IP
+    external_ip: bool,
+}
+
+#[derive(arg::Args, Debug)]
 ///Check subcommands
 enum CheckEntity {
-    ///Checks the state of cluster
+    ///Checks pods in the cluster
     Pods(CheckPods),
+    ///Checks nodes in the cluster
+    Nodes(CheckNodes),
 }
 
 #[derive(arg::Args, Debug)]
 ///Check the state of cluster
 struct Check {
     #[arg(sub)]
-    ///Specifies entity to check. Possible values: pods
+    ///Specifies entity to check. Possible values: pods, nodes
     entity: CheckEntity,
 }
 
@@ -55,7 +68,7 @@ enum Command {
 ///Kubernetes checker
 struct Args {
     #[arg(sub)]
-    ///Checks the state of cluster
+    ///Available commands: check
     cmd: Command,
 }
 
@@ -111,6 +124,24 @@ fn check_pods(pods: &[kube::Pod], args: CheckPods) -> ExitCode {
     print_table(tabled.data_tabled(pods))
 }
 
+fn check_nodes(nodes: &[kube::Node], args: CheckNodes) -> ExitCode {
+    let mut tabled = output::Tabled::<_, &dyn output::Field< _>>::new();
+    tabled = tabled.with_header(&output::fields::Name)
+                   .with_header(&output::fields::Status)
+                   .with_header(&output::fields::Ip);
+    if args.external_ip {
+        tabled = tabled.with_header(&output::fields::ExternalIp)
+    }
+
+    if args.image {
+        tabled = tabled.with_header(&output::fields::Image)
+                       .with_header(&output::fields::Kernel)
+                       .with_header(&output::fields::Arch)
+    }
+
+    print_table(tabled.data_tabled(nodes))
+}
+
 async fn run(args: Args) -> ExitCode {
     let kube = match KubeClient::new().await {
         Ok(kube) => kube,
@@ -137,6 +168,17 @@ async fn run(args: Args) -> ExitCode {
                     check_pods(&pods, args)
                 }
             },
+            CheckEntity::Nodes(args) => {
+                let nodes = match kube.list_nodes().await {
+                    Ok(pods) => pods,
+                    Err(error) => {
+                        eprintln!("Failed to list nodes: {error}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+
+                check_nodes(&nodes, args)
+            }
         },
     }
 }

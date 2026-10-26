@@ -2,12 +2,19 @@
 
 use kube::{api, Api, Result};
 pub use k8s_openapi;
+use k8s_openapi::serde::de::DeserializeOwned;
 use compact_str::CompactString;
 
-use core::{iter, slice};
+use core::{iter, slice, fmt};
+use core::future::Future;
 use std::collections::BTreeMap;
 
 use crate::utils::{time, Retry};
+
+const DEFAULT: CompactString = CompactString::const_new("default");
+const UNKNOWN: CompactString = CompactString::const_new("Unknown");
+const READY: CompactString = CompactString::const_new("Ready");
+const NOT_READY: CompactString = CompactString::const_new("NotReady");
 
 #[derive(Copy, Clone)]
 ///Possible pod's container states
@@ -186,8 +193,6 @@ impl<'a> IntoIterator for &'a Pod {
 
 impl From<k8s_openapi::api::core::v1::Pod> for Pod {
     fn from(value: k8s_openapi::api::core::v1::Pod) -> Self {
-        const DEFAULT: CompactString = CompactString::const_new("default");
-
         let mut containers = Vec::<PodContainer>::new();
         let mut init_containers = Vec::<PodContainer>::new();
         let mut node_name = None;
@@ -422,9 +427,93 @@ fn is_kube_error_transient(error: &kube::Error) -> bool {
     }
 }
 
+
+#[derive(Default)]
+///Node information limited to most useful one
+pub struct NodeIps {
+    ///External IP of the node available to external network (if you exposed your node for use y load balancer etc)
+    pub external_ip: Option<CompactString>,
+    ///Internal IP of the node used to communicate within cluster only.
+    pub internal_ip: Option<CompactString>,
+}
+
+impl From<Option<Vec<k8s_openapi::api::core::v1::NodeAddress>>> for NodeIps {
+    #[inline]
+    fn from(value: Option<Vec<k8s_openapi::api::core::v1::NodeAddress>>) -> Self {
+        let mut this = NodeIps::default();
+        for addr in value.into_iter().flatten() {
+            if addr.type_.eq_ignore_ascii_case("ExternalIP") {
+                this.external_ip = Some(addr.address.into())
+            } else if addr.type_.eq_ignore_ascii_case("InternalIP") {
+                this.internal_ip = Some(addr.address.into())
+            }
+        }
+        this
+    }
+}
+
+#[derive(Default)]
+///Node information limited to most useful one
+pub struct Node {
+    ///Node name
+    pub name: CompactString,
+    ///Current status. Ready/NotReady/Unknown
+    pub status: CompactString,
+    ///Architecture used by the node
+    pub arch: CompactString,
+    ///Image used by node
+    pub image: CompactString,
+    ///Kernel version
+    pub kernel: CompactString,
+    ///Unique machine id
+    pub machine_id: CompactString,
+    ///IPs of the node.
+    pub ips: NodeIps,
+}
+
+impl Node {
+    #[inline]
+    fn parse_conditions_status(conditions: &Option<Vec<k8s_openapi::api::core::v1::NodeCondition>>) -> CompactString {
+        for condition in conditions.iter().flatten() {
+            if condition.type_.eq_ignore_ascii_case("Ready") {
+                if condition.status.eq_ignore_ascii_case("True") {
+                    return READY;
+                } else if condition.status.eq_ignore_ascii_case("False") {
+                    return NOT_READY;
+                }
+
+                //There is only one Ready condition, so we can skip everything else
+                break;
+            }
+        }
+
+        UNKNOWN
+    }
+}
+
+impl From<k8s_openapi::api::core::v1::Node> for Node {
+    #[inline]
+    fn from(value: k8s_openapi::api::core::v1::Node) -> Self {
+        let name = value.metadata.name.map(Into::into).unwrap_or_default();
+        match value.status.map(|status| (status.node_info, status.addresses, status.conditions)) {
+            Some((Some(info), addrs, conditions)) => Self {
+                name,
+                status: Self::parse_conditions_status(&conditions),
+                image: info.os_image.into(),
+                kernel: info.kernel_version.into(),
+                machine_id: info.machine_id.into(),
+                arch: info.architecture.into(),
+                ips: addrs.into(),
+            },
+            _ => Default::default()
+        }
+    }
+}
+
 ///Wrapper over [kube] client
 pub struct KubeClient {
-    api: Api<k8s_openapi::api::core::v1::Pod>,
+    api_pod: Api<k8s_openapi::api::core::v1::Pod>,
+    api_node: Api<k8s_openapi::api::core::v1::Node>,
     list_params: api::ListParams,
     retry: Retry<time::Duration>
 }
@@ -435,7 +524,8 @@ impl KubeClient {
         let client = kube::Client::try_default().await?;
 
         Ok(Self {
-            api: Api::all(client),
+            api_pod: Api::all(client.clone()),
+            api_node: Api::all(client.clone()),
             list_params: api::ListParams::default().limit(100),
             retry: Retry::new(10).with_wait(time::Duration::from_millis(100))
         })
@@ -447,25 +537,36 @@ impl KubeClient {
         self
     }
 
-    ///Returns list of pods
-    pub async fn list_pods(&self) -> Result<Vec<Pod>> {
+    async fn list_resource<T: kube::Resource + Clone + fmt::Debug + DeserializeOwned, O: From<T>>(&self, api: &Api<T>) -> Result<Vec<O>> {
         let mut list_params = self.list_params.clone();
 
-        let mut pods = Vec::<Pod>::new();
-        let mut result = self.retry.run(|| self.api.list(&list_params), is_kube_error_transient).await?;
+        let mut resources = Vec::<O>::new();
+        let mut result = self.retry.run(|| api.list(&list_params), is_kube_error_transient).await?;
         let mut continue_token = result.metadata.continue_;
-        for pod in result.items {
-            pods.push(pod.into());
+        for resource in result.items {
+            resources.push(resource.into());
         }
         while let Some(next_token) = continue_token.take() {
             list_params.continue_token = Some(next_token);
-            result = self.retry.run(|| self.api.list(&list_params), is_kube_error_transient).await?;
+            result = self.retry.run(|| api.list(&list_params), is_kube_error_transient).await?;
             continue_token = result.metadata.continue_;
-            for pod in result.items {
-                pods.push(pod.into());
+            for resource in result.items {
+                resources.push(resource.into());
             }
         }
 
-        Ok(pods)
+        Ok(resources)
+    }
+
+    #[inline(always)]
+    ///Returns list of pods
+    pub fn list_pods(&self) -> impl Future<Output = Result<Vec<Pod>>> + Send + '_ {
+        self.list_resource(&self.api_pod)
+    }
+
+    #[inline(always)]
+    ///Returns list of nodes
+    pub fn list_nodes(&self) -> impl Future<Output = Result<Vec<Node>>> + Send + '_ {
+        self.list_resource(&self.api_node)
     }
 }

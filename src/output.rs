@@ -250,22 +250,30 @@ pub mod fields {
 
     impl_field!(
         ///Name accessor
-        impl Name for &'data Pod.name &'data PodContainer.name PodContainerFullRef<'data>.pod.name
+        impl Name for &'data Pod.name &'data PodContainer.name PodContainerFullRef<'data>.pod.name &'data Node.name
         ///Container Name accessor
         impl Container for &'data PodContainer.name PodContainerFullRef<'data>.container.name
         ///Namespace accessor
         impl Namespace for &'data Pod.namespace PodContainerFullRef<'data>.pod.namespace
         ///Status accessor
-        impl Status for &'data PodContainer.status PodContainerFullRef<'data>.container.status
+        impl Status for &'data PodContainer.status PodContainerFullRef<'data>.container.status &'data Node.status
         ///Image accessor
-        impl Image for &'data PodContainer.image PodContainerFullRef<'data>.container.image
+        impl Image for &'data PodContainer.image PodContainerFullRef<'data>.container.image &'data Node.image
+        ///Architecture accessor
+        impl Arch for &'data Node.arch
+        ///Kernel accessor
+        impl Kernel for &'data Node.kernel
+        ///Machine id accessor
+        impl MachineId for &'data Node.machine_id
     );
 
     impl_opt_field!(
         ///Node accessor
         impl Node for &'data Pod.node_name PodContainerFullRef<'data>.pod.node_name
         ///IP accessor
-        impl Ip for &'data Pod.pod_ip PodContainerFullRef<'data>.pod.pod_ip
+        impl Ip for &'data Pod.pod_ip PodContainerFullRef<'data>.pod.pod_ip &'data Node.ips.internal_ip
+        ///External IP accessor
+        impl ExternalIp for &'data Node.ips.external_ip
         ///ImageId accessor
         impl ImageId for &'data PodContainer.image_id PodContainerFullRef<'data>.container.image_id
         ///CPU accessor
